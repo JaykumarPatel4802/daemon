@@ -1,0 +1,11 @@
+energat
+energat/*
+energat_daemon/__pycache__
+energat_daemon/*.db
+energat_daemon/*.db-wal
+energat_daemon/*.db-shm
+energat_daemon/tracer_alt.py
+*.csv
+data
+test
+test.c
