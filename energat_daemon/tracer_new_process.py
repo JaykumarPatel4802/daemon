@@ -22,24 +22,16 @@ from target import TargetStatus
 
 
 class EnergyTracer(object):
-
-    sqlite_db = None
-    csv_file = None
-
     def __init__(
-        self, target_pid: int, attach=False, project: str = None, output: str = None, container_id = None
+        self, target_pid: int, attach=False, project: str = None, output: str = None
     ):
         if not target_exists(target_pid):
             logger.error(f"Target application ({target_pid}) doesn't exist!!!\n")
             exit(1)
 
-        self.container_id = container_id
-        self.stop_tracer_daemon_thread = False
-
         self.target_process = psutil.Process(target_pid) if target_pid > 0 else None
         self.core_pkg_map = self.get_core_pkg_mapping()
         self.num_cpu_sockets = len(set(self.core_pkg_map.values()))
-        print(f"main process: num_cpu_sockets {self.num_cpu_sockets}")
         # * [[pkg_max1, pkg_max2, ...], [dram_max1, dram_max2, ...]]
         self.max_energy_ranges_j = self.read_max_energy_ranges()
 
@@ -47,9 +39,9 @@ class EnergyTracer(object):
         self.target_processes: Set[int] = set()
         self.target_threads: Set[int] = set()
 
-        # self.tracer_process = multiprocessing.Process(
-        #     name="EnergAt::tracer", target=self.run, args=[]
-        # )
+        self.tracer_process = multiprocessing.Process(
+            name="EnergAt::tracer", target=self.run, args=[]
+        )
         self.tracer_daemon_thread = None
         self.mutex = threading.Lock()
         self.iolock = threading.Lock()
@@ -76,12 +68,10 @@ class EnergyTracer(object):
 
         if attach:
             self.load_baseline_power()
-
         return
 
     def run(self, rapl_interval_sec=FLAGS.interval):
         ts_start = time.perf_counter()
-        print(f"Interval Time: {rapl_interval_sec}")
         if rapl_interval_sec < 0.05:
             logger.critical(
                 f"RAPL sampling interval ({rapl_interval_sec}s) shouldn't be < 50ms"
@@ -90,12 +80,10 @@ class EnergyTracer(object):
         self.tracer_daemon_thread = threading.Thread(
             name="tracer-daemon", target=self.sample_targets_status, daemon=True
         )
-        self.stop_tracer_daemon_thread = False
         self.tracer_daemon_thread.start()
-        # tasks = [self.tracer_process.pid, self.tracer_daemon_thread.native_id]
-        tasks = [self.tracer_daemon_thread.native_id]
-        # logger.info(f"Tracer process PID: {self.tracer_process.pid}")
-        # logger.info(f"Daemon thread TID: {self.tracer_daemon_thread.native_id}")
+        tasks = [self.tracer_process.pid, self.tracer_daemon_thread.native_id]
+        logger.info(f"Tracer process PID: {self.tracer_process.pid}")
+        logger.info(f"Daemon thread TID: {self.tracer_daemon_thread.native_id}")
         pin_tasks(tasks)
 
         # * [num_sockets x (pkg, dram)]
@@ -111,150 +99,124 @@ class EnergyTracer(object):
         ts_before = time.perf_counter()
 
         # * Obtain threads and processes before the start.
-        print("main process: update_targets")
         self.update_targets()
         self.empty_targets_status()
 
         targets_alive = True
 
-        # with ProcessSignalHandler() as sighandler:
-            # elapsed = time.perf_counter() - ts_before
-            # interval_delta_sec = rapl_interval_sec - elapsed
-            # if interval_delta_sec < 0:
-            #     logger.warn(
-            #         f"One lap exceeded RAPL interval by {-interval_delta_sec}s"
-            #     )
-            # else:
-            #     time.sleep(interval_delta_sec)
-
-        time.sleep(0.01)
-
-        """Reading energy from RAPL interface."""
-        # * [2 x num_sockets]: Column i is the (cpu, dram) of socket i.
-        readings_now = self.read_pkg_mem_joules()
-        ts_now = time.perf_counter()
-        total_energy_j = np.array(readings_now) - np.array(readings_before)
-        if (total_energy_j < 0).any():
-            overflow_indices = np.where(total_energy_j < 0)
-            total_energy_j[overflow_indices] = +self.max_energy_ranges_j[
-                overflow_indices
-            ]
-            logger.warn(
-                f"Negative energy reading occurred -> Max RAPL ranges exceeded."
-            )
-
-        total_consumption += total_energy_j
-        duration_sec = ts_now - ts_before
-
-        """Recording the cpu time of the targets for the duration of the energy readings."""
-        self.record_targets_cputime()
-        server_cputime_now = self.get_server_cputime()
-        total_server_cputime_sec = np.array(server_cputime_now) - np.array(
-            server_cputime_before
-        )
-
-        """Subtracting static energy to get attributable energy."""
-        pkg_percents, dram_percents = self.check_baseline_power()
-        base_energy_j = self.compute_baseline_energy_joules(duration_sec)
-        delta_energy_j = total_energy_j - base_energy_j
-
-        if (delta_energy_j < 0).any():
-            delta_energy_j[delta_energy_j < 0] = 0
-            logger.warn(f"Total energy less than baseline energy!")
-
-        baseline_consumption += base_energy_j
-
-        """Ascribing energy from delta."""
-        # ascribed_energy_j, credit_fracs, tracer_energy_j = self.ascribe_energy(
-        #     delta_energy_j, total_server_cputime_sec
-        # )
-        ascribed_energy_j, credit_fracs = self.ascribe_energy(
-            delta_energy_j, total_server_cputime_sec
-        )
-        # tracer_energy_j = 0
-        ascribable_consumption += ascribed_energy_j
-
-        # """Updating the targets and check if they are still alive."""
-        # We don't care about this I think
-        # targets_alive = self.update_targets()
-        # """Creating new status for all targets."""
-        # self.empty_targets_status()
-
-            # if sighandler.stopped or not targets_alive:
-            #     self.collect_results(
-            #         duration_sec,
-            #         total_energy_j,
-            #         base_energy_j,
-            #         ascribed_energy_j,
-            #         # tracer_energy_j,
-            #         credit_fracs,
-            #         pkg_percents,
-            #         dram_percents,
-            #         flash=True,
-            #     )
-
-                # print()
-                # logger.warn(f"Tracer was stopped!!!")
-                # logger.info(
-                #     f"Total duration: {datetime.timedelta(seconds=time.perf_counter()-ts_start)}"
-                # )
-                # for socket in range(self.num_cpu_sockets):
-                #     logger.info(
-                #         f"Total energy of {socket=} (pkg, dram):"
-                #         f"\t {total_consumption[:, socket]} J"
+        with ProcessSignalHandler() as sighandler:
+            # while True:
+            for i in range(1):
+                # elapsed = time.perf_counter() - ts_before
+                # interval_delta_sec = rapl_interval_sec - elapsed
+                # if interval_delta_sec < 0:
+                #     logger.warn(
+                #         f"One lap exceeded RAPL interval by {-interval_delta_sec}s"
                 #     )
-                #     logger.info(
-                #         f"Baseline energy of {socket=} (pkg, dram):"
-                #         f"\t {baseline_consumption[:, socket]} J"
-                #     )
-                #     logger.info(
-                #         f"Ascribed energy of {socket=} (pkg, dram):"
-                #         f"{ascribable_consumption[:, socket]} J"
-                #     )
-                # self.stop_tracer_daemon_thread = True 
-                # if self.tracer_daemon_thread.is_alive():
-                #     self.tracer_daemon_thread.join()
-                # return
+                # else:
+                #     time.sleep(interval_delta_sec)
+
+                """Reading energy from RAPL interface."""
+                # * [2 x num_sockets]: Column i is the (cpu, dram) of socket i.
+                readings_now = self.read_pkg_mem_joules()
+                ts_now = time.perf_counter()
+                total_energy_j = np.array(readings_now) - np.array(readings_before)
+                if (total_energy_j < 0).any():
+                    overflow_indices = np.where(total_energy_j < 0)
+                    total_energy_j[overflow_indices] = +self.max_energy_ranges_j[
+                        overflow_indices
+                    ]
+                    logger.warn(
+                        f"Negative energy reading occurred -> Max RAPL ranges exceeded."
+                    )
+
+                total_consumption += total_energy_j
+                duration_sec = ts_now - ts_before
+
+                """Recording the cpu time of the targets for the duration of the energy readings."""
+                self.record_targets_cputime()
+                server_cputime_now = self.get_server_cputime()
+                total_server_cputime_sec = np.array(server_cputime_now) - np.array(
+                    server_cputime_before
+                )
+
+                """Subtracting static energy to get attributable energy."""
+                pkg_percents, dram_percents = self.check_baseline_power()
+                base_energy_j = self.compute_baseline_energy_joules(duration_sec)
+                delta_energy_j = total_energy_j - base_energy_j
+
+                if (delta_energy_j < 0).any():
+                    delta_energy_j[delta_energy_j < 0] = 0
+                    logger.warn(f"Total energy less than baseline energy!")
+
+                baseline_consumption += base_energy_j
+
+                """Ascribing energy from delta."""
+                ascribed_energy_j, credit_fracs, tracer_energy_j = self.ascribe_energy(
+                    delta_energy_j, total_server_cputime_sec
+                )
+                ascribable_consumption += ascribed_energy_j
+
+                """Updating the targets and check if they are still alive."""
+                targets_alive = self.update_targets()
+                """Creating new status for all targets."""
+                self.empty_targets_status()
+
+                self.collect_results(
+                    duration_sec,
+                    total_energy_j,
+                    base_energy_j,
+                    ascribed_energy_j,
+                    tracer_energy_j,
+                    credit_fracs,
+                    pkg_percents,
+                    dram_percents,
+                )
+
+                if sighandler.stopped or not targets_alive:
+                    self.collect_results(
+                        duration_sec,
+                        total_energy_j,
+                        base_energy_j,
+                        ascribed_energy_j,
+                        tracer_energy_j,
+                        credit_fracs,
+                        pkg_percents,
+                        dram_percents,
+                        flash=True,
+                    )
+
+                    print()
+                    logger.warn(f"Tracer was stopped!!!")
+                    logger.info(
+                        f"Total duration: {datetime.timedelta(seconds=time.perf_counter()-ts_start)}"
+                    )
+                    for socket in range(self.num_cpu_sockets):
+                        logger.info(
+                            f"Total energy of {socket=} (pkg, dram):"
+                            f"\t {total_consumption[:, socket]} J"
+                        )
+                        logger.info(
+                            f"Baseline energy of {socket=} (pkg, dram):"
+                            f"\t {baseline_consumption[:, socket]} J"
+                        )
+                        logger.info(
+                            f"Ascribed energy of {socket=} (pkg, dram):"
+                            f"{ascribable_consumption[:, socket]} J"
+                        )
+                    return
+
+                """Carrying results to the next iteration."""
+                server_cputime_before, readings_before, ts_before = (
+                    server_cputime_now,
+                    readings_now,
+                    ts_now,
+                )
 
             # *> End of tracer process loop.
-        self.collect_results(
-            duration_sec,
-            total_energy_j,
-            base_energy_j,
-            ascribed_energy_j,
-            # tracer_energy_j,
-            credit_fracs,
-            pkg_percents,
-            dram_percents,
-            flash=True,
-        )
-
-            # print()
-            # logger.warn(f"Tracer was stopped!!!")
-            # logger.info(
-            #     f"Total duration: {datetime.timedelta(seconds=time.perf_counter()-ts_start)}"
-            # )
-            # for socket in range(self.num_cpu_sockets):
-            #     logger.info(
-            #         f"Total energy of {socket=} (pkg, dram):"
-            #         f"\t {total_consumption[:, socket]} J"
-            #     )
-            #     logger.info(
-            #         f"Baseline energy of {socket=} (pkg, dram):"
-            #         f"\t {baseline_consumption[:, socket]} J"
-            #     )
-            #     logger.info(
-            #         f"Ascribed energy of {socket=} (pkg, dram):"
-            #         f"{ascribable_consumption[:, socket]} J"
-            #     )
-        self.stop_tracer_daemon_thread = True 
-        if self.tracer_daemon_thread.is_alive():
-            self.tracer_daemon_thread.join()
-        return
 
     def sample_targets_status(self, sample_interval_s=FLAGS.rapl_period):
-        print(f"SAMPLE TARGETS STATUS")
-        while True and not self.stop_tracer_daemon_thread:
+        while True:
             try:
                 socket_used_mem = self.read_socket_numa_mem_mib("MemUsed")
 
@@ -266,9 +228,7 @@ class EnergyTracer(object):
                     self.server_numa_mem_samples[socket].append(socket_used_mem[socket])
 
                 disappeared_targets = []
-                print(f"thread: len of targets_status.values() {len(self.targets_status.values())}")
                 for status in self.targets_status.values():
-                    print('thread: In outer for loop of sample_targets_status()')
                     exists = target_exists(status.target.pid)
                     if not exists:
                         # ? Can/should we preserve partial results?
@@ -276,7 +236,6 @@ class EnergyTracer(object):
                             f"(daemon) Stopped tracing status of {status.target.pid}"
                         )
                         disappeared_targets.append(status.target.pid)
-                        print(f"thred: the target doesn't exist")
                         continue
 
                     """Accumulating target residence counters."""
@@ -295,8 +254,6 @@ class EnergyTracer(object):
                         samples = status.numa_mem_samples.get(_socket, [])
                         samples.append(private_mem[_socket])  # * Add new samples.
                         status.numa_mem_samples[_socket] = samples  # * Put them back.
-                        print(f"Just added to numa_mem_samples list")
-                    print(f"thread: target_pid: {status.target} with numa_mem_samples.keys: {status.numa_mem_samples.keys()}")
 
                 # * Update targets in case of deletion.
                 for pid in disappeared_targets:
@@ -312,7 +269,6 @@ class EnergyTracer(object):
 
             time.sleep(sample_interval_s)
         # *> End of while loop.
-        print("tracer daemon thread STOPPED")
 
     def ascribe_energy(
         self, total_energy_j: npt.ArrayLike, total_server_cputime_sec: npt.ArrayLike
@@ -323,16 +279,13 @@ class EnergyTracer(object):
         :param total_server_cputime_sec: {npt.ArrayLike} [socket1, socket2, ...]
         :return: Ascribable energies in Joules.
         """
-
-        print("ASCRIBING ENERGY")
-
         is_tracer = lambda _id: _id in [
-            # self.tracer_process.pid,
+            self.tracer_process.pid,
             self.tracer_daemon_thread.native_id,
         ]
 
         ascribable_energy_j = np.zeros_like(total_energy_j)
-        # tracer_energy_j = np.zeros_like(total_energy_j)
+        tracer_energy_j = np.zeros_like(total_energy_j)
         if not self.targets_status:
             # * No active targets.
             return ascribable_energy_j
@@ -341,11 +294,9 @@ class EnergyTracer(object):
         self.mutex.acquire()
 
         ascribable_cputime = [0.0] * self.num_cpu_sockets
-        # tracer_cpu = [0.0] * self.num_cpu_sockets
+        tracer_cpu = [0.0] * self.num_cpu_sockets
         # ! Assume that all targets have the same #samples since no new targets are added during sampling,
         # ! although some dead/inactive ones might be deleted by the daemon.
-        for status in self.targets_status.values():
-            print(f"main process: length of numa_mema_samples for pid {status.target} is {len(status.numa_mem_samples)}")
         num_mem_samples = len(
             next(iter(self.targets_status.values())).numa_mem_samples[0]
         )
@@ -374,8 +325,7 @@ class EnergyTracer(object):
                 cputime = target_cputime * socket_residence_probs[socket]
                 # * Tracer runtime.
                 if is_tracer(status.target.pid):
-                    # tracer_cpu[socket] += cputime
-                    continue
+                    tracer_cpu[socket] += cputime
                 else:
                     ascribable_cputime[socket] += cputime
 
@@ -390,10 +340,9 @@ class EnergyTracer(object):
             for socket in range(self.num_cpu_sockets):
                 # * Accumulate memory sample points across targets.
                 if is_tracer(status.target.pid):
-                    # tracer_mem_samples[socket] += np.array(
-                    #     status.numa_mem_samples[socket]
-                    # )
-                    continue
+                    tracer_mem_samples[socket] += np.array(
+                        status.numa_mem_samples[socket]
+                    )
                 else:
                     accumulated_private_mem_samples[socket] += np.array(
                         status.numa_mem_samples[socket]
@@ -444,28 +393,27 @@ class EnergyTracer(object):
             credit_fracs[1][socket] = mem_credit_frac
 
             """Crediting tracer energy."""
-            # tracer_cpu_frac = min(
-            #     1.0, tracer_cpu[socket] / total_server_cputime_sec[socket]
-            # )
-            # tracer_energy_j[0][socket] = cpu_energy * (tracer_cpu_frac**gamma_cpu)
+            tracer_cpu_frac = min(
+                1.0, tracer_cpu[socket] / total_server_cputime_sec[socket]
+            )
+            tracer_energy_j[0][socket] = cpu_energy * (tracer_cpu_frac**gamma_cpu)
 
-            # tracer_mem_frac = min(
-            #     1.0, (tracer_mem_samples[socket] / server_mem_samples).mean()
-            # )
+            tracer_mem_frac = min(
+                1.0, (tracer_mem_samples[socket] / server_mem_samples).mean()
+            )
             # tracer_mem_frac = min(1., tracer_mem_samples[socket].sum()/server_mem_samples.sum())
-            # tracer_energy_j[1][socket] = dram_energy * (tracer_mem_frac**delta_mem)
+            tracer_energy_j[1][socket] = dram_energy * (tracer_mem_frac**delta_mem)
 
             if round(time.time()) % FLAGS.logging == 0:
                 logger.debug(
                     f"{socket=}: {cpu_credit_frac=: .3f}, {mem_credit_frac=: .3f}"
                 )
-                # logger.debug(
-                #     f"{socket=}: {tracer_cpu_frac=: .3f}, {tracer_mem_frac=: .3f}"
-                # )
+                logger.debug(
+                    f"{socket=}: {tracer_cpu_frac=: .3f}, {tracer_mem_frac=: .3f}"
+                )
 
         self.mutex.release()
-        # return ascribable_energy_j, credit_fracs, tracer_energy_j
-        return ascribable_energy_j, credit_fracs
+        return ascribable_energy_j, credit_fracs, tracer_energy_j
 
     def launch(self):
         if not self.baseline.estimated:
@@ -616,18 +564,14 @@ class EnergyTracer(object):
         return
 
     def empty_targets_status(self):
-        print("calling empty_targets_status")
         targets = self.target_processes.copy()
-        print(f"Targets are: {targets}")
         targets.update(self.target_threads)
-        print(f"Updated targets are: {targets}")
 
         # * Get the lock before deleting everything s.t. the daemon is safe.
         self.mutex.acquire()
         self.targets_status = {
             pid: TargetStatus(pid) for pid in targets if target_exists(pid)
         }
-        print(f"length of targets_status: {len(self.targets_status)}")
         self.server_numa_mem_samples = {
             socket: [] for socket in range(self.num_cpu_sockets)
         }
@@ -690,8 +634,8 @@ class EnergyTracer(object):
 
         removed_processes = self.target_processes - processes
         removed_threads = self.target_threads - threads
-        # if removed_processes and removed_processes != {self.tracer_process.pid}:
-        #     logger.info(f"Removed processes {removed_processes} from targets")
+        if removed_processes and removed_processes != {self.tracer_process.pid}:
+            logger.info(f"Removed processes {removed_processes} from targets")
         if removed_threads and removed_threads != {self.tracer_daemon_thread.native_id}:
             logger.info(f"Removed processes {removed_threads} from targets")
 
@@ -700,8 +644,8 @@ class EnergyTracer(object):
 
         # * Always track the tracer process and daemon thread explicitly
         # * in case they are not children of the target (i.e., attach mode).
-        # self.target_processes.add(self.tracer_process.pid)
-        # self.target_threads.add(self.tracer_daemon_thread.native_id)
+        self.target_processes.add(self.tracer_process.pid)
+        self.target_threads.add(self.tracer_daemon_thread.native_id)
         return True
 
     def read_pkg_mem_joules(self) -> Tuple[List[float], List[float]]:
@@ -778,7 +722,7 @@ class EnergyTracer(object):
         total_energy_joules: npt.ArrayLike,
         base_energy_joules: npt.ArrayLike,
         ascribed_energy_joules: npt.ArrayLike,
-        # tracer_energy_joules: npt.ArrayLike,
+        tracer_energy_joules: npt.ArrayLike,
         credit_fracs: List[float],
         pkg_percents: List[float],
         dram_percents: List[float],
@@ -791,40 +735,21 @@ class EnergyTracer(object):
         """
 
         def flash_results():
-            self.iolock.acquire()   # can remove
-
-            # df = pd.DataFrame(self.traces)
-            # if os.path.isfile(self.trace_file):
-            #     prevdf = pd.read_csv(self.trace_file)
-            #     df = pd.concat([prevdf, df])
-            # df.to_csv(self.trace_file, index=False)
-
+            self.iolock.acquire()
             df = pd.DataFrame(self.traces)
-            if os.path.isfile(EnergyTracer.csv_file):
-                prevdf = pd.read_csv(EnergyTracer.csv_file)
+            if os.path.isfile(self.trace_file):
+                prevdf = pd.read_csv(self.trace_file)
                 df = pd.concat([prevdf, df])
-            df.to_csv(EnergyTracer.csv_file, index=False)
-
-            # for trace in self.traces:
-            #     # Insert data into the SQLite table
-            #     insert_table_entry = f"INSERT INTO function_energy_utilization_advanced (container_id, timestamp, socket, duration_sec, num_proc, num_threads, pkg_credit_frac, dram_credit_frac, total_pkg_joules, total_dram_joules, base_pkg_joules, base_dram_joules, ascribed_pkg_joules, ascribed_dram_joules, tracer_pkg_joules, tracer_dram_joules, pkg_percent, dram_percent) VALUES ('{self.container_id}', '{trace["time"]})', '{trace["socket"]})', '{trace["duration_sec"]})', '{trace["num_proc"]})', '{trace["num_threads"]})', '{trace["pkg_credit_frac"]})', '{trace["dram_credit_frac"]})', '{trace["total_pkg_joules"]})', '{trace["total_dram_joules"]})', '{trace["base_pkg_joules"]})', '{trace["base_dram_joules"]})', '{trace["ascribed_pkg_joules"]})', '{trace["ascribed_dram_joules"]})', '{trace["tracer_pkg_joules"]})', '{trace["tracer_dram_joules"]})', '{trace["pkg_percent"]})', '{trace["dram_percent"]})')"
-
-            #     try:
-            #         sqlite_db.execute(insert_table_entry)
-            #         sqlite_db.commit()
-            #     except:
-            #         logger.critical(f"Error saving to sqlite")
-            
+            df.to_csv(self.trace_file, index=False)
             # total_duration = df.duration_sec.sum()
-            # logger.info(f"Energy traces saved to {self.trace_file}")
+            logger.info(f"Energy traces saved to {self.trace_file}")
             self.traces = []
-            self.iolock.release()   # can remove
+            self.iolock.release()
             return
 
         ts = time.time()
         for socket in range(self.num_cpu_sockets):
             record = {
-                "container_id": self.container_id,
                 "time": ts,
                 "socket": socket,
                 "duration_sec": duration_sec,
@@ -838,20 +763,18 @@ class EnergyTracer(object):
                 "base_dram_joules": base_energy_joules[1][socket],
                 "ascribed_pkg_joules": ascribed_energy_joules[0][socket],
                 "ascribed_dram_joules": ascribed_energy_joules[1][socket],
-                # "tracer_pkg_joules": tracer_energy_joules[0][socket],
-                # "tracer_dram_joules": tracer_energy_joules[1][socket],
+                "tracer_pkg_joules": tracer_energy_joules[0][socket],
+                "tracer_dram_joules": tracer_energy_joules[1][socket],
                 "pkg_percent": pkg_percents[socket],
                 "dram_percent": dram_percents[socket],
             }
-            print(f"Recorded one sample | time {ts} | {', '.join(f'{key}: {value}' for key, value in record.items())}")
             self.traces.append(record)
 
         # total_duration = 0
-        # if flash or len(self.traces) >= 100:
-        #     logger.info("Flash results")
-        #     thread = threading.Thread(target=flash_results)
-        #     thread.start()
-        flash_results()
+        if flash or len(self.traces) >= 100:
+            logger.info("Flash results")
+            thread = threading.Thread(target=flash_results)
+            thread.start()
         return
 
     def read_socket_numa_mem_mib(self, kind):
