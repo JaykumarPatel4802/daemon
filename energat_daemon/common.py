@@ -104,7 +104,9 @@ def pin_tasks(tasks: List[int], cores: List[int] = None, n_cores: int = 1):
         cores = np.argsort(percents)[:n_cores].tolist()
     for task in tasks:
         subprocess.run(
-            ["sudo", "taskset", "-cp", ",".join(map(str, cores)), f"{task}"], check=True
+            ["sudo", "taskset", "-cp", ",".join(map(str, cores)), f"{task}"], check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
         )
 
     logger.info(f"Pinned {tasks} to {cores=}")

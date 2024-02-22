@@ -35,11 +35,12 @@ class EnergyTracer(object):
 
         self.container_id = container_id
         self.stop_tracer_daemon_thread = False
+        self.container_pid = target_pid
 
         self.target_process = psutil.Process(target_pid) if target_pid > 0 else None
         self.core_pkg_map = self.get_core_pkg_mapping()
         self.num_cpu_sockets = len(set(self.core_pkg_map.values()))
-        print(f"main process: num_cpu_sockets {self.num_cpu_sockets}")
+        # print(f"main process: num_cpu_sockets {self.num_cpu_sockets}")
         # * [[pkg_max1, pkg_max2, ...], [dram_max1, dram_max2, ...]]
         self.max_energy_ranges_j = self.read_max_energy_ranges()
 
@@ -81,7 +82,7 @@ class EnergyTracer(object):
 
     def run(self, rapl_interval_sec=FLAGS.interval):
         ts_start = time.perf_counter()
-        print(f"Interval Time: {rapl_interval_sec}")
+        # print(f"Interval Time: {rapl_interval_sec}")
         if rapl_interval_sec < 0.05:
             logger.critical(
                 f"RAPL sampling interval ({rapl_interval_sec}s) shouldn't be < 50ms"
@@ -111,7 +112,7 @@ class EnergyTracer(object):
         ts_before = time.perf_counter()
 
         # * Obtain threads and processes before the start.
-        print("main process: update_targets")
+        # print("main process: update_targets")
         self.update_targets()
         self.empty_targets_status()
 
@@ -127,7 +128,7 @@ class EnergyTracer(object):
             # else:
             #     time.sleep(interval_delta_sec)
 
-        time.sleep(0.01)
+        time.sleep(0.025)
 
         """Reading energy from RAPL interface."""
         # * [2 x num_sockets]: Column i is the (cpu, dram) of socket i.
@@ -253,7 +254,7 @@ class EnergyTracer(object):
         return
 
     def sample_targets_status(self, sample_interval_s=FLAGS.rapl_period):
-        print(f"SAMPLE TARGETS STATUS")
+        # print(f"SAMPLE TARGETS STATUS")
         while True and not self.stop_tracer_daemon_thread:
             try:
                 socket_used_mem = self.read_socket_numa_mem_mib("MemUsed")
@@ -266,9 +267,9 @@ class EnergyTracer(object):
                     self.server_numa_mem_samples[socket].append(socket_used_mem[socket])
 
                 disappeared_targets = []
-                print(f"thread: len of targets_status.values() {len(self.targets_status.values())}")
+                # print(f"thread: len of targets_status.values() {len(self.targets_status.values())}")
                 for status in self.targets_status.values():
-                    print('thread: In outer for loop of sample_targets_status()')
+                    # print('thread: In outer for loop of sample_targets_status()')
                     exists = target_exists(status.target.pid)
                     if not exists:
                         # ? Can/should we preserve partial results?
@@ -276,7 +277,7 @@ class EnergyTracer(object):
                             f"(daemon) Stopped tracing status of {status.target.pid}"
                         )
                         disappeared_targets.append(status.target.pid)
-                        print(f"thred: the target doesn't exist")
+                        # print(f"thred: the target doesn't exist")
                         continue
 
                     """Accumulating target residence counters."""
@@ -295,8 +296,8 @@ class EnergyTracer(object):
                         samples = status.numa_mem_samples.get(_socket, [])
                         samples.append(private_mem[_socket])  # * Add new samples.
                         status.numa_mem_samples[_socket] = samples  # * Put them back.
-                        print(f"Just added to numa_mem_samples list")
-                    print(f"thread: target_pid: {status.target} with numa_mem_samples.keys: {status.numa_mem_samples.keys()}")
+                        # print(f"Just added to numa_mem_samples list")
+                    # print(f"thread: target_pid: {status.target} with numa_mem_samples.keys: {status.numa_mem_samples.keys()}")
 
                 # * Update targets in case of deletion.
                 for pid in disappeared_targets:
@@ -312,7 +313,7 @@ class EnergyTracer(object):
 
             time.sleep(sample_interval_s)
         # *> End of while loop.
-        print("tracer daemon thread STOPPED")
+        # print("tracer daemon thread STOPPED")
 
     def ascribe_energy(
         self, total_energy_j: npt.ArrayLike, total_server_cputime_sec: npt.ArrayLike
@@ -324,7 +325,7 @@ class EnergyTracer(object):
         :return: Ascribable energies in Joules.
         """
 
-        print("ASCRIBING ENERGY")
+        # print("ASCRIBING ENERGY")
 
         is_tracer = lambda _id: _id in [
             # self.tracer_process.pid,
@@ -344,8 +345,8 @@ class EnergyTracer(object):
         # tracer_cpu = [0.0] * self.num_cpu_sockets
         # ! Assume that all targets have the same #samples since no new targets are added during sampling,
         # ! although some dead/inactive ones might be deleted by the daemon.
-        for status in self.targets_status.values():
-            print(f"main process: length of numa_mema_samples for pid {status.target} is {len(status.numa_mem_samples)}")
+        # for status in self.targets_status.values():
+            # print(f"main process: length of numa_mema_samples for pid {status.target} is {len(status.numa_mem_samples)}")
         num_mem_samples = len(
             next(iter(self.targets_status.values())).numa_mem_samples[0]
         )
@@ -616,18 +617,18 @@ class EnergyTracer(object):
         return
 
     def empty_targets_status(self):
-        print("calling empty_targets_status")
+        # print("calling empty_targets_status")
         targets = self.target_processes.copy()
-        print(f"Targets are: {targets}")
+        # print(f"Targets are: {targets}")
         targets.update(self.target_threads)
-        print(f"Updated targets are: {targets}")
+        # print(f"Updated targets are: {targets}")
 
         # * Get the lock before deleting everything s.t. the daemon is safe.
         self.mutex.acquire()
         self.targets_status = {
             pid: TargetStatus(pid) for pid in targets if target_exists(pid)
         }
-        print(f"length of targets_status: {len(self.targets_status)}")
+        # print(f"length of targets_status: {len(self.targets_status)}")
         self.server_numa_mem_samples = {
             socket: [] for socket in range(self.num_cpu_sockets)
         }
@@ -825,6 +826,7 @@ class EnergyTracer(object):
         for socket in range(self.num_cpu_sockets):
             record = {
                 "container_id": self.container_id,
+                "container_pid": self.container_pid,
                 "time": ts,
                 "socket": socket,
                 "duration_sec": duration_sec,
@@ -843,7 +845,7 @@ class EnergyTracer(object):
                 "pkg_percent": pkg_percents[socket],
                 "dram_percent": dram_percents[socket],
             }
-            print(f"Recorded one sample | time {ts} | {', '.join(f'{key}: {value}' for key, value in record.items())}")
+            # print(f"Recorded one sample | time {ts} | {', '.join(f'{key}: {value}' for key, value in record.items())}")
             self.traces.append(record)
 
         # total_duration = 0

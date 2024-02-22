@@ -50,24 +50,28 @@ def process_container(container_id, db):
     #     energy_tracer_objects[container_id] = energy_tracer
     
 
-    ## Without New Process Code
-    # name = f"target-{docker_pid}"
-    # # print(f"Name is {name}")
+    # Without New Process Code
+    name = f"target-{docker_pid}"
+    # print(f"Name is {name}")
     # print(f"Docker container PID: {docker_pid}")
-    # energy_tracer = EnergyTracer(docker_pid, attach=True, project=name, container_id = container_id)
+    energy_tracer = EnergyTracer(docker_pid, attach=True, project=name, container_id = container_id)
     # print("Running tracer")
-    # energy_tracer.run()
+    try:
+        energy_tracer.run()
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
     # print("DONE")
 
-    ## With New Process Code
-    print(f"NEW DOCKER: {docker_pid} at: {time.time()}")
-    name = f"target-{docker_pid}"
-    energy_tracer = EnergyTracer(docker_pid, attach=True, project=name)
-    try:
-        energy_tracer.launch()
-        energy_tracer.tracer_process.join()
-    except:
-        energy_tracer.stop()
+    # ## With New Process Code
+    # print(f"NEW DOCKER: {docker_pid} at: {time.time()}")
+    # name = f"target-{docker_pid}"
+    # energy_tracer = EnergyTracer(docker_pid, attach=True, project=name)
+    # try:
+    #     energy_tracer.launch()
+    #     energy_tracer.tracer_process.join()
+    # except:
+    #     energy_tracer.stop()
 
     # try:
     #     # energy_tracer.run()
@@ -140,7 +144,7 @@ def main():
                     if entry.is_dir() and entry.name not in ('.', '..'):
                         container_name = entry.name
                         if container_name not in init_containers:
-                            print(f"container name: {container_name} time: {time.time()}")
+                            # print(f"container name: {container_name} time: {time.time()}")
                             process_container(container_name, db)
                         # process_container(container_name, db)
             # time.sleep(daemon_period)  # Sleep for 500 milliseconds
