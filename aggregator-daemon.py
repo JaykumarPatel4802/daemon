@@ -106,6 +106,46 @@ def monitor_start_lines(db_conn, cursor, data_queue):
             elif not log_line:
                 time.sleep(0.1)
 
+def filter_outliers(time_power):
+    power = time_power[: 1]
+    mean_power = np.mean(power)
+    std_power = np.std(power)
+    upper_bound = mean_power + (3 * std_power)
+    lower_bound = mean_power - (3 * std_power)
+    filtered_time_power = time_power[(time_power[:, 1] <= upper_bound) & (time_power[:, 1] >= lower_bound)]
+    
+    return filtered_time_power
+
+def parse_energy(rows):
+    timestamp_list = np.array([row[0] for row in rows])
+    socket_list = np.array([row[1] for row in rows])
+    durations_sec_list = np.array([row[2] for row in rows])
+    ascribed_pkg_joules_list = np.array([row[3] for row in rows])
+    ascribed_dram_joules_list = np.array([row[4] for row in rows])
+
+    # everytime stamp has 2 entries, for each socket, so combine and condense data here
+    timestamps = timestamp_list[::2]
+    durations = durations_sec_list[::2]
+    pkg_pairs = ascribed_pkg_joules_list.reshape(-1, 2)
+    ascribed_pkg_joules_list = np.sum(pkg_pairs, axis = 1)
+    dram_pairs = ascribed_dram_joules_list.reshape(-1, 2)
+    ascribed_dram_joules_list = np.sum(dram_pairs, axis = 1)
+    energies = ascribed_pkg_joules_list + ascribed_dram_joules_list
+
+    # now timestamps, durations, and total_energies has everything I need to calcualte final energy
+    centered_timestamps = timestamps - (durations / 2)
+    powers = energies / durations
+
+    time_power = np.array(list(zip(centered_timestamps, powers)))
+    filtered_time_power = filter_outliers(time_power)
+    final_timestamps = filtered_time_power[: 0]
+    final_powers = filtered_time_power[: 1]
+
+    final_energy = np.trapz(final_powers, x=final_timestamps)
+
+    return final_energy
+
+
 # Function to monitor the queue and process data
 def monitor_queue(data_queue):
     try:
@@ -124,9 +164,19 @@ def monitor_queue(data_queue):
                             (start_time, end_time, container_id))
                 rows = cursor.fetchall()
 
+                cursor.execute("SELECT timestamp, socket, duration_sec, ascribed_pkg_joules, ascribed_dram_joules from function_energy_utilization_advanced WHERE timestamp BETWEEN ? AND ? and container_id = ?",
+                            (start_time, end_time, container_id))
+                energy_rows = cursor.fetchall()
+
                 # Sometimes we may not capture utilization -- usually because new container was spun up 
+
+                energy = -2
+
                 # for an invocation and completed before thread for that container began collecting util
                 if rows:
+
+                    if energy_rows:
+                        energy = parse_energy(rows)
 
                     # Extract data from the rows
                     cpu_usages = np.array([row[0] for row in rows])

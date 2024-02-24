@@ -6,6 +6,7 @@ import os
 import sqlite3
 import time
 import docker
+import traceback
 
 
 init_containers = set()
@@ -38,8 +39,11 @@ def process_container(container_id, db):
         save the object
     """
 
-    docker_pid = getDockerPid(container_id)
-    energy_tracer = None
+    try:
+        docker_pid = getDockerPid(container_id)
+        energy_tracer = None
+    except:
+        return
 
     # if container_id in energy_tracer_objects:
     #     energy_tracer = energy_tracer_objects[container_id]
@@ -60,6 +64,7 @@ def process_container(container_id, db):
         energy_tracer.run()
     except Exception as e:
         print(f"An error occurred: {e}")
+        # traceback.print_exc()
 
     # print("DONE")
 
@@ -187,6 +192,7 @@ def main():
     #         tracer.stop()
     # else:
     #     logger.error("No target process specified.")
+    print("Exiting")
     return 0
 
 

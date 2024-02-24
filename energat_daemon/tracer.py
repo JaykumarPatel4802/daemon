@@ -31,7 +31,8 @@ class EnergyTracer(object):
     ):
         if not target_exists(target_pid):
             logger.error(f"Target application ({target_pid}) doesn't exist!!!\n")
-            exit(1)
+            print("Target doesn't exist during init!")
+            # exit(1)
 
         self.container_id = container_id
         self.stop_tracer_daemon_thread = False
@@ -127,8 +128,9 @@ class EnergyTracer(object):
             #     )
             # else:
             #     time.sleep(interval_delta_sec)
+            
 
-        time.sleep(0.025)
+        time.sleep(0.05)
 
         """Reading energy from RAPL interface."""
         # * [2 x num_sockets]: Column i is the (cpu, dram) of socket i.
