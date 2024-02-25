@@ -125,6 +125,7 @@ def parse_energy(rows):
 
     # everytime stamp has 2 entries, for each socket, so combine and condense data here
     timestamps = timestamp_list[::2]
+    timestamps = timestamps.astype(np.float64)
     durations = durations_sec_list[::2]
     pkg_pairs = ascribed_pkg_joules_list.reshape(-1, 2)
     ascribed_pkg_joules_list = np.sum(pkg_pairs, axis = 1)
@@ -138,8 +139,13 @@ def parse_energy(rows):
 
     time_power = np.array(list(zip(centered_timestamps, powers)))
     filtered_time_power = filter_outliers(time_power)
-    final_timestamps = filtered_time_power[: 0]
-    final_powers = filtered_time_power[: 1]
+    final_timestamps = filtered_time_power[:, 0]
+    final_powers = filtered_time_power[:, 1]
+
+    if len(final_timestamps) == 0:
+        return 0
+    elif len(final_timestamps) == 1:
+        return energies[0]
 
     final_energy = np.trapz(final_powers, x=final_timestamps)
 
@@ -170,7 +176,7 @@ def monitor_queue(data_queue):
 
                 # Sometimes we may not capture utilization -- usually because new container was spun up 
 
-                energy = -2
+                energy = -1
 
                 # for an invocation and completed before thread for that container began collecting util
                 if rows:

@@ -793,6 +793,8 @@ class EnergyTracer(object):
         :param ascribable_energy_consumption: [num_sockets x (pkg, dram)]
         """
 
+        print("Collecting Results")
+
         def flash_results():
             self.iolock.acquire()   # can remove
 
@@ -802,21 +804,23 @@ class EnergyTracer(object):
             #     df = pd.concat([prevdf, df])
             # df.to_csv(self.trace_file, index=False)
 
-            df = pd.DataFrame(self.traces)
-            if os.path.isfile(EnergyTracer.csv_file):
-                prevdf = pd.read_csv(EnergyTracer.csv_file)
-                df = pd.concat([prevdf, df])
-            df.to_csv(EnergyTracer.csv_file, index=False)
+            # df = pd.DataFrame(self.traces)
+            # if os.path.isfile(EnergyTracer.csv_file):
+            #     prevdf = pd.read_csv(EnergyTracer.csv_file)
+            #     df = pd.concat([prevdf, df])
+            # df.to_csv(EnergyTracer.csv_file, index=False)
 
-            # for trace in self.traces:
-            #     # Insert data into the SQLite table
-            #     insert_table_entry = f"INSERT INTO function_energy_utilization_advanced (container_id, timestamp, socket, duration_sec, num_proc, num_threads, pkg_credit_frac, dram_credit_frac, total_pkg_joules, total_dram_joules, base_pkg_joules, base_dram_joules, ascribed_pkg_joules, ascribed_dram_joules, tracer_pkg_joules, tracer_dram_joules, pkg_percent, dram_percent) VALUES ('{self.container_id}', '{trace["time"]})', '{trace["socket"]})', '{trace["duration_sec"]})', '{trace["num_proc"]})', '{trace["num_threads"]})', '{trace["pkg_credit_frac"]})', '{trace["dram_credit_frac"]})', '{trace["total_pkg_joules"]})', '{trace["total_dram_joules"]})', '{trace["base_pkg_joules"]})', '{trace["base_dram_joules"]})', '{trace["ascribed_pkg_joules"]})', '{trace["ascribed_dram_joules"]})', '{trace["tracer_pkg_joules"]})', '{trace["tracer_dram_joules"]})', '{trace["pkg_percent"]})', '{trace["dram_percent"]})')"
+            for trace in self.traces:
+                # Insert data into the SQLite table
 
-            #     try:
-            #         sqlite_db.execute(insert_table_entry)
-            #         sqlite_db.commit()
-            #     except:
-            #         logger.critical(f"Error saving to sqlite")
+                insert_table_entry = f"INSERT INTO function_energy_utilization_advanced (container_id, timestamp, socket, duration_sec, num_proc, num_threads, pkg_credit_frac, dram_credit_frac, total_pkg_joules, total_dram_joules, base_pkg_joules, base_dram_joules, ascribed_pkg_joules, ascribed_dram_joules, pkg_percent, dram_percent) VALUES ('{self.container_id}', '{trace['time']}', '{trace['socket']}', '{trace['duration_sec']}', '{trace['num_proc']}', '{trace['num_threads']}', '{trace['pkg_credit_frac']}', '{trace['dram_credit_frac']}', '{trace['total_pkg_joules']}', '{trace['total_dram_joules']}', '{trace['base_pkg_joules']}', '{trace['base_dram_joules']}', '{trace['ascribed_pkg_joules']}', '{trace['ascribed_dram_joules']}', '{trace['pkg_percent']}', '{trace['dram_percent']}')"
+
+                try:
+                    self.sqlite_db.execute(insert_table_entry)
+                    self.sqlite_db.commit()
+                except:
+                    print("Error saving to sqlite")
+                    logger.critical(f"Error saving to sqlite")
             
             # total_duration = df.duration_sec.sum()
             # logger.info(f"Energy traces saved to {self.trace_file}")
@@ -849,6 +853,9 @@ class EnergyTracer(object):
             }
             # print(f"Recorded one sample | time {ts} | {', '.join(f'{key}: {value}' for key, value in record.items())}")
             self.traces.append(record)
+        
+        print("Self.traces in collect_results: ")
+        print(self.traces)
 
         # total_duration = 0
         # if flash or len(self.traces) >= 100:
