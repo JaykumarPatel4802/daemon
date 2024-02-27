@@ -182,7 +182,7 @@ def monitor_queue(data_queue):
                 if rows:
 
                     if energy_rows:
-                        energy = parse_energy(rows)
+                        energy = parse_energy(energy_rows)
 
                     # Extract data from the rows
                     cpu_usages = np.array([row[0] for row in rows])
